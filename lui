@@ -1,0 +1,82 @@
+#!/usr/bin/env luvit
+
+local Table = require('table')
+
+-- get dependencies for the current package
+local ok, deps = pcall(require, process.cwd() .. '/package')
+if ok then deps = deps.dependencies or {} else deps = {} end
+
+-- collect Makefile lines
+local makefile = {}
+local function push(str, ...)
+  if not str then str = '' end
+  Table.insert(makefile, str:format(...))
+end
+
+push('ROOT := $(shell pwd)')
+push('HERE := %s', process.cwd())
+push()
+
+-- compose install target
+local install = 'install:'
+for k, v in pairs(deps) do
+  install = install .. ' modules/' .. k
+end
+push(install)
+push('	test -f Makefile && $(MAKE)')
+push()
+
+-- compose update target
+local update = 'update: clean install'
+push(update)
+push()
+
+-- enlist dependencies
+for k, v in pairs(deps) do
+  push('modules/' .. k .. ':')
+  if v:find('://') then
+    push('	mkdir -p $(@D)')
+    push('	wget -qct3 -O - "%s" >$@.tmp', v)
+    push('	unzip -q -o -d $(@D) $@.tmp 2>/dev/null || tar -xzpf $@.tmp -C $(@D)')
+    push('	rm -fr $@.tmp')
+    push('	mv $(@D)/$(@F)-* $@ 2>/dev/null || mv $(@D)/*-$(@F)-* $@ 2>/dev/null')
+  elseif v:find('git@') then
+    push('	mkdir -p $(@D)')
+    push('	git clone "%s" $@', v)
+  else
+    push('	FORMAT-UNKNOWN %s', v)
+  end
+  push('	cd $@ ; lui')
+  push()
+end
+
+-- compose clean target
+push('clean:')
+push('	rm -fr build modules')
+push()
+
+-- enlist phony targets
+push('.PHONY: install update clean')
+--push('.SILENT:')
+push()
+
+-- concat Makefile lines
+makefile = Table.concat(makefile, '\n')
+if dry_run then
+  print(makefile)
+  process.exit(0)
+end
+
+-- invoke `make` with collected Makefile
+local child = require('process').spawn('/bin/sh', {'-c', 'make -f -'}, {})
+--child.stdout:on('data', function(data)
+--  print(data)
+--end)
+child.stderr:on('data', function(data)
+  print(data)
+end)
+child:on('exit', function (exit_status, term_signal)
+  process.exit(exit_status)
+end)
+child.stdin:write(makefile)
+child.stdin:close()
