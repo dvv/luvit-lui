@@ -23,7 +23,7 @@ for k, v in pairs(deps) do
   install = install .. ' modules/' .. k
 end
 push(install)
-push('	test -f Makefile && $(MAKE)')
+push('	test -f Makefile && $(MAKE) || true')
 push()
 
 -- compose update target
