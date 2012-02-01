@@ -12,17 +12,6 @@ local parse_url = require('url').parse
 local unzip = require('balls').unzip
 
 --
--- helper to not let errors go down
---
-
-local function check(err)
-  if err then
-    debug(err)
-    error(tostring(err))
-  end
-end
-
---
 -- a simple command line arguments parser
 -- N.B. it's bundled version of stripped down dvv/luvit-cmdline
 --
@@ -58,8 +47,26 @@ local function parse_argv(argv)
   return opts, args
 end
 
+--
+-- parse command line
+--
+
 local options, arguments = parse_argv()
+
+--
+-- setup logger
+--
+
 local info = options.debug and print or function () end
+
+--
+-- report overall status on exit
+--
+
+local exit_code = 0
+process:once('exit', function (a, b)
+  exit_process(exit_code)
+end)
 
 --
 -- HTTP request helper
@@ -150,6 +157,8 @@ local function request(options, callback)
         end
       -- report HTTP errors
       elseif st >= 400 then
+        -- close the request
+        req:close()
         err = Error:new(data)
         -- FIXME: should reuse status_code_message from Response?
         err.code = st
@@ -167,7 +176,10 @@ local function request(options, callback)
       client:close()
     end)
     -- pipe errors to callback
-    client:once('error', callback)
+    client:once('error', function (err)
+      client:close()
+      callback(err)
+    end)
 
   end)
 
@@ -187,7 +199,6 @@ local function unpack(url, path, options, callback)
     callback = options
   end
   if not options then options = { } end
-  info('Unzipping "' .. url .. '" to "' .. path .. '"')
   request({
     url = url,
     method = 'GET',
@@ -197,6 +208,7 @@ local function unpack(url, path, options, callback)
       callback(err)
       return
     end
+    info(Utils.colorize('Bblack', 'Unzipping ') .. url .. Utils.colorize('Bblack', ' to ') .. path .. '')
     unzip(stream, {
       path = path,
       strip = options.strip,
@@ -223,7 +235,7 @@ local function install(cwd)
   local deps = { }
   local bins = { }
   local ok, manifest = pcall(require, Path.join(cwd, 'package'))
-  if ok then
+  if ok and manifest then
     deps = manifest.dependencies or { }
     -- add development dependencies if --dev option is given
     if options.dev then
@@ -231,17 +243,6 @@ local function install(cwd)
         deps[k] = v
       end
     end
-    --[[
-    -- print deps in verbose mode
-    if options.debug and manifest.dependencies then
-      local printed = false
-      for k, v in pairs(deps) do
-        if not printed then info(indent .. 'To be installed:') end
-        printed = true
-        info(indent .. '\t' .. k)
-      end
-    end
-    ]]--
     bins = manifest.bin or { }
   end
 
@@ -252,7 +253,7 @@ local function install(cwd)
     local target = Path.join(cwd, 'modules', name)
     url = getUrl(name)
 
-    info('Installing "' .. name .. '"')
+    info(Utils.colorize('Bblack', 'Installing ') .. Utils.colorize('yellow', name))
     unpack(url, target, { strip = 1 }, function (err)
 
       --p('E', err)
@@ -261,7 +262,10 @@ local function install(cwd)
         status = err.message or err.code or err
       end
       info(Utils.colorize(err and 'Bred' or 'green', 'Installed "' .. name .. '": ' .. status))
-      if err then return end
+      if err then
+        exit_code = 1
+        return
+      end
 
       -- install this dependency dependencies
       install(target)
