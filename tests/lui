@@ -34,6 +34,10 @@ local function unpack(module, path, options, callback)
   end)
 end
 
+local function getUrl(name)
+  return 'http://nodeload.github.com/dvv/luvit-' .. name .. '/zipball/master'
+end
+
 local function install(cwd)
 
   if not cwd then cwd = '.' end
@@ -51,7 +55,7 @@ local function install(cwd)
   for name, url in pairs(deps) do
 
     local target = Path.join(cwd, 'modules', name)
-    url = 'http://nodeload.github.com/dvv/luvit-' .. name .. '/zipball/master'
+    url = getUrl(name)
 
     unpack(url, target, { strip = 1 }, function (err)
 
@@ -60,18 +64,6 @@ local function install(cwd)
 
       -- install this dependency dependencies
       install(target)
-
-      -- invoke make, if Makefile found
-      if Fs.exists_sync(Path.join(target, 'Makefile')) then
-        local make = Process:spawn('/usr/bin/env', {'make'}, { cwd = target })
-        make:on('exit', function (exit_status, term_signal)
-          p('MADE', name, exit_status)
-        end)
-        -- let's see stderr
-        make.stderr:on('data', function (data)
-          print(data)
-        end)
-      end
 
     end)
 
