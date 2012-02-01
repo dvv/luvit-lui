@@ -1,9 +1,9 @@
-[Lui](https://github.com/luvit/lui) is a dumb installer for [Luvit](https://github.com/luvit/luvit)
+[Lui](https://github.com/dvv/luvit-lui) is a dumb dependencies installer for [Luvit](https://github.com/luvit/luvit)
 ===
 
-`Lui` is a helper script composing a Makefile and then executing it.
+`Lui` is a helper script composing a Makefile, which then is executed to perform real installation of dependencies.
 
-`Lui` depends on nothing more than vanilla system tools:
+`Lui` depends on nothing but vanilla system tools:
 
  - make
  - wget
@@ -22,12 +22,12 @@ Move to your package root and type:
 
     lui
 
-`Lui` will analyze `package.lua`, if any, and will install dependencies under `modules/` directory. For each installed module `lui` will as well install dependencies.
+`Lui` analyzes package manifest, `package.lua`, if any, and installs package dependencies. For each installed module `lui` as well installs dependencies.
 
 License
 -------
 
-Copyright (c) 2011 Vladimir Dronnikov <dronnikov@gmail.com>
+Copyright (c) 2012 Vladimir Dronnikov <dronnikov@gmail.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

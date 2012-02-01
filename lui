@@ -86,7 +86,7 @@ if dry_run then
 end
 
 -- invoke `make` with collected Makefile
-local child = require('process').spawn('/bin/sh', {'-c', 'make -f -'}, {})
+local child = require('process'):spawn('/bin/sh', {'-c', 'make -f -'}, {})
 --child.stdout:on('data', function(data)
 --  print(data)
 --end)
