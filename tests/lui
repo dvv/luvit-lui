@@ -1,0 +1,30 @@
+#!/usr/bin/env luvit
+
+local wget = require('../../curl').get
+local unzip = require('../../balls').unzip
+
+local function check(err)
+  if err then
+    debug(err)
+    error(tostring(err))
+  end
+end
+
+local function unpack(module, path, callback)
+  wget({
+    url = module,
+    parse = false,
+  }, function (err, stream)
+    if err then callback(err) ; return end
+    unzip(stream, {
+      path = path,
+      strip = 1,
+    }, callback)
+  end)
+end
+
+unpack('http://nodeload.github.com/dvv/luvit-lui/zipball/master', 'tmp/lui', function (err)
+      p('DONE', err)
+      check(err)
+      --process.exit(err and 1 or 0)
+end)

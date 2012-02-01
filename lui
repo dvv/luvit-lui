@@ -37,7 +37,7 @@ end
 push(install)
 push('	test -f Makefile && $(MAKE) || true')
 -- copy bin scripts
-if bind_dir then
+if bin_dir then
   for k, v in pairs(bins) do
     push('	cp ' .. v .. ' ' .. bin_dir .. '/' .. k)
   end
