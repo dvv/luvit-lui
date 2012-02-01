@@ -1,19 +1,10 @@
-[Lui](https://github.com/dvv/luvit-lui) is a dumb dependencies installer for [Luvit](https://github.com/luvit/luvit)
+Luvit Installer
 ===
-
-`Lui` is a helper script composing a Makefile, which then is executed to perform real installation of dependencies.
-
-`Lui` depends on nothing but vanilla system tools:
-
- - make
- - wget
- - tar/unzip
- - git, optionally
 
 Installation
 -----
 
-As simple as putting `lui` script under your `$PATH`. If you manage `luvit` installation via [luvm](https://github.com/luvit/luvm) this is done automatically.
+As simple as putting `lui` script under your `$PATH`. If you manage `luvit` installation via [luvm](https://github.com/dvv/luvit-luvm) this is done automatically.
 
 Usage
 -----
