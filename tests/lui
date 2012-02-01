@@ -1,11 +1,14 @@
 #!/usr/bin/env luvit
 
+local Table = require('table')
+local Utils = require('utils')
 local Path = require('path')
 local Fs = require('fs')
 local Error = require('error')
 local DNS = require('dns')
 local HTTP = require('http')
 local parse_url = require('url').parse
+
 local unzip = require('balls').unzip
 
 --
@@ -20,8 +23,49 @@ local function check(err)
 end
 
 --
--- HTTP request helper
+-- a simple command line arguments parser
+-- N.B. it's bundled version of stripped down dvv/luvit-cmdline
 --
+
+local function parse_argv(argv)
+  if not argv then argv = process.argv end
+  local opts = { }
+  local args = { }
+  for i, arg in ipairs(argv) do
+    local opt = arg:match("^%-%-(.*)")
+    if opt then
+      local key, value = opt:match("([a-z_%-]*)=(.*)")
+      if value then
+        if type(opts[key]) == 'string' then
+          opts[key] = { opts[key], value }
+        elseif type(opts[key]) == 'table' then
+          Table.insert(opts[key], value)
+        else
+          opts[key] = value
+        end
+      elseif opt ~= '' then
+        opts[opt] = true
+      else
+        for i = i + 1, #argv do
+          Table.insert(args, argv[i])
+        end
+        break
+      end
+    else
+      Table.insert(args, arg)
+    end
+  end
+  return opts, args
+end
+
+local options, arguments = parse_argv()
+local info = options.debug and print or function () end
+
+--
+-- HTTP request helper
+-- N.B. it's bundled version of stripped down dvv/luvit-curl
+--
+
 local function request(options, callback)
 
   setmetatable(options, { __index = {
@@ -62,6 +106,8 @@ local function request(options, callback)
     -- ...with path equal to original URL
     params.path = options.url
   end
+
+  info('Getting ' .. options.url .. '...')
 
   --p('PARAMS', params)
   -- resolve target host name
@@ -135,17 +181,22 @@ end
 -- load and unzip a remote zipball into local `path`
 --
 
-local function unpack(module, path, options, callback)
+local function unpack(url, path, options, callback)
   if type(options) == 'function' then
     options = nil
     callback = options
   end
   if not options then options = { } end
+  info('Unzipping "' .. url .. '" to "' .. path .. '"')
   request({
-    url = module,
+    url = url,
     method = 'GET',
   }, function (err, stream)
-    if err then callback(err) ; return end
+    if err then
+      --stream:close()
+      callback(err)
+      return
+    end
     unzip(stream, {
       path = path,
       strip = options.strip,
@@ -171,11 +222,29 @@ local function install(cwd)
   -- get dependencies for the current package
   local deps = { }
   local bins = { }
-  local ok, info = pcall(require, Path.join(cwd, 'package'))
+  local ok, manifest = pcall(require, Path.join(cwd, 'package'))
   if ok then
-    deps = info.dependencies or { }
-    bins = info.bin or { }
+    deps = manifest.dependencies or { }
+    -- add development dependencies if --dev option is given
+    if options.dev then
+      for k, v in pairs(manifest.devDependencies or { }) do
+        deps[k] = v
+      end
+    end
+    --[[
+    -- print deps in verbose mode
+    if options.debug and manifest.dependencies then
+      local printed = false
+      for k, v in pairs(deps) do
+        if not printed then info(indent .. 'To be installed:') end
+        printed = true
+        info(indent .. '\t' .. k)
+      end
+    end
+    ]]--
+    bins = manifest.bin or { }
   end
+
 
   -- fulfil deps
   for name, url in pairs(deps) do
@@ -183,9 +252,15 @@ local function install(cwd)
     local target = Path.join(cwd, 'modules', name)
     url = getUrl(name)
 
+    info('Installing "' .. name .. '"')
     unpack(url, target, { strip = 1 }, function (err)
 
-      p('INSTALLED', name, err)
+      --p('E', err)
+      local status = 'OK'
+      if err then
+        status = err.message or err.code or err
+      end
+      info(Utils.colorize(err and 'Bred' or 'green', 'Installed "' .. name .. '": ' .. status))
       if err then return end
 
       -- install this dependency dependencies
@@ -197,5 +272,8 @@ local function install(cwd)
 
 end
 
--- install this module dependencies
+--
+-- start installing this module dependencies
+--
+
 install(process.cwd())
