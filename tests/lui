@@ -34,31 +34,50 @@ local function unpack(module, path, options, callback)
   end)
 end
 
--- get dependencies for the current package
-local deps = { }
-local bins = { }
-local ok, info = pcall(require, process.cwd() .. '/package')
-if ok then
-  deps = info.dependencies or { }
-  bins = info.bin or { }
+local function install(cwd)
+
+  if not cwd then cwd = '.' end
+
+  -- get dependencies for the current package
+  local deps = { }
+  local bins = { }
+  local ok, info = pcall(require, Path.join(cwd, 'package'))
+  if ok then
+    deps = info.dependencies or { }
+    bins = info.bin or { }
+  end
+
+  -- fulfil deps
+  for name, url in pairs(deps) do
+
+    local target = Path.join(cwd, 'modules', name)
+    url = 'http://nodeload.github.com/dvv/luvit-' .. name .. '/zipball/master'
+
+    unpack(url, target, { strip = 1 }, function (err)
+
+      p('INSTALLED', name, err)
+      if err then return end
+
+      -- install this dependency dependencies
+      install(target)
+
+      -- invoke make, if Makefile found
+      if Fs.exists_sync(Path.join(target, 'Makefile')) then
+        local make = Process:spawn('/usr/bin/env', {'make'}, { cwd = target })
+        make:on('exit', function (exit_status, term_signal)
+          p('MADE', name, exit_status)
+        end)
+        -- let's see stderr
+        make.stderr:on('data', function (data)
+          print(data)
+        end)
+      end
+
+    end)
+
+  end
+
 end
 
--- fulfil deps
-for name, url in pairs(deps) do
-  url = 'http://nodeload.github.com/dvv/luvit-' .. name .. '/zipball/master'
-  local target = Path.join('modules', name)
-  unpack(url, target, { strip = 1 }, function (err)
-    p('INSTALLED', name, err)
-    if err then return end
-    -- invoke make, if Makefile found
-    if Fs.exists_sync(Path.join(target, 'Makefile')) then
-      local make = Process:spawn('/usr/bin/env', {'make'}, { cwd = target })
-      make:on('exit', function (exit_status, term_signal)
-        p('MADE', name, exit_status)
-      end)
-      make.stderr:on('data', function (data)
-        print(data)
-      end)
-    end
-  end)
-end
+-- install this module dependencies
+install(process.cwd())
