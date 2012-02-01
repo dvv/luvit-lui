@@ -2,9 +2,15 @@
 
 local Path = require('path')
 local Fs = require('fs')
-local Process = require('process')
-local wget = require('../../curl').get
-local unzip = require('../../balls').unzip
+local Error = require('error')
+local DNS = require('dns')
+local HTTP = require('http')
+local parse_url = require('url').parse
+local unzip = require('balls').unzip
+
+--
+-- helper to not let errors go down
+--
 
 local function check(err)
   if err then
@@ -13,15 +19,131 @@ local function check(err)
   end
 end
 
+--
+-- HTTP request helper
+--
+local function request(options, callback)
+
+  setmetatable(options, { __index = {
+    method = 'GET',
+    proxy = true,
+    redirects = 10,
+  }})
+
+  -- parse URL
+  local parsed = options
+  if options.url then
+    parsed = parse_url(options.url)
+    setmetatable(parsed, { __index = options })
+  end
+
+  -- collect HTTP request options
+  local params = {
+    host = parsed.hostname or parsed.host,
+    port = parsed.port,
+    path = parsed.pathname .. parsed.search,
+    method = options.method,
+    headers = options.headers,
+  }
+
+  -- honor proxy, if any
+  local proxy = options.proxy
+  -- proxy can be string which is used verbatim,
+  -- or boolean true to use system proxy
+  if proxy == true then
+    proxy = process.env[parsed.protocol .. '_proxy']
+  end
+  -- proxying means...
+  if proxy then
+    -- ...request the proxy host
+    parsed = parse_url(proxy)
+    params.host = parsed.hostname or parsed.host
+    params.port = parsed.port
+    -- ...with path equal to original URL
+    params.path = options.url
+  end
+
+  --p('PARAMS', params)
+  -- resolve target host name
+  -- FIXME: the whole resolve thingy should go deeper to TCP layer
+  local status, err = pcall(DNS.resolve, params.host, function (err, ips)
+
+    -- DNS errors are ignored if host name looks like a valid IP
+    if err and not DNS.isIP(params.host) then
+      callback(err)
+      return
+    end
+    --p('IP', err, ips)
+    -- FIXME: should try every IP, in case of error
+    if ips then params.host = ips[1] end
+
+    --p('PARAMS', params)
+    --TODO: set Content-Length: if options.data
+    -- issue the request
+    local client = HTTP.request(params, function (req)
+
+      local st = req.status_code
+      -- handle redirect
+      if st > 300 and st < 400 and req.headers.location then
+        -- can follow new location?
+        if options.redirects and options.redirects > 0 then
+          -- FIXME: spoils original options. make it feature? ;)
+          options.redirects = options.redirects - 1
+          options.url = req.headers.location
+          -- for short redirects (RFC2616 compliant?) prepend current host name
+          if not parse_url(options.url).host then
+            options.url = parsed.protocol .. '://' .. parsed.host .. options.url
+          end
+          -- request redirected location
+          request(options, callback)
+          return
+        -- can't follow
+        else
+          -- FIXME: what to do? so far let's think it's ok, proceed to data parsing
+          --callback(nil)
+        end
+      -- report HTTP errors
+      elseif st >= 400 then
+        err = Error:new(data)
+        -- FIXME: should reuse status_code_message from Response?
+        err.code = st
+        callback(err)
+        return
+      end
+
+      -- request was ok
+      callback(nil, req)
+
+    end)
+
+    -- purge issued request
+    client:once('end', function ()
+      client:close()
+    end)
+    -- pipe errors to callback
+    client:once('error', callback)
+
+  end)
+
+  if not status then
+    callback(err)
+  end
+
+end
+
+--
+-- load and unzip a remote zipball into local `path`
+--
+
 local function unpack(module, path, options, callback)
   if type(options) == 'function' then
     options = nil
     callback = options
   end
   if not options then options = { } end
-  wget({
+  request({
     url = module,
-    parse = false,
+    method = 'GET',
   }, function (err, stream)
     if err then callback(err) ; return end
     unzip(stream, {
@@ -33,6 +155,10 @@ local function unpack(module, path, options, callback)
     end)
   end)
 end
+
+--
+-- ???
+--
 
 local function getUrl(name)
   return 'http://nodeload.github.com/dvv/luvit-' .. name .. '/zipball/master'
