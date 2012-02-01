@@ -1,5 +1,7 @@
 #!/usr/bin/env luvit
 
+local Path = require('path')
+local Fs = require('fs')
 local wget = require('../../curl').get
 local unzip = require('../../balls').unzip
 
@@ -10,7 +12,12 @@ local function check(err)
   end
 end
 
-local function unpack(module, path, callback)
+local function unpack(module, path, options, callback)
+  if type(options) == 'function' then
+    options = nil
+    callback = options
+  end
+  if not options then options = { } end
   wget({
     url = module,
     parse = false,
@@ -18,13 +25,32 @@ local function unpack(module, path, callback)
     if err then callback(err) ; return end
     unzip(stream, {
       path = path,
-      strip = 1,
-    }, callback)
+      strip = options.strip,
+    }, function (err)
+      stream:close()
+      callback(err)
+    end)
   end)
 end
 
-unpack('http://nodeload.github.com/dvv/luvit-lui/zipball/master', 'tmp/lui', function (err)
-      p('DONE', err)
-      check(err)
-      --process.exit(err and 1 or 0)
-end)
+-- get dependencies for the current package
+local deps = { }
+local bins = { }
+local ok, info = pcall(require, process.cwd() .. '/package')
+if ok then
+  deps = info.dependencies or { }
+  bins = info.bin or { }
+end
+
+-- fulfil deps
+for name, url in pairs(deps) do
+  url = 'http://nodeload.github.com/dvv/luvit-' .. name .. '/zipball/master'
+  local target = Path.join('modules', name)
+  unpack(url, target, { strip = 1 }, function (err)
+    p('INSTALLED', name, err)
+    if err then return end
+    if Fs.exists_sync(Path.join(target, 'Makefile')) then
+      -- TODO: run make
+    end
+  end)
+end
