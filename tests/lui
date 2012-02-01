@@ -50,7 +50,11 @@ for name, url in pairs(deps) do
     p('INSTALLED', name, err)
     if err then return end
     if Fs.exists_sync(Path.join(target, 'Makefile')) then
-      -- TODO: run make
+      -- invoke make
+      local make = require('process'):spawn('/usr/bin/env', {'make'}, { cwd = target })
+      make:on('exit', function (exit_status, term_signal)
+        p('MADE', name, exit_status)
+      end)
     end
   end)
 end
