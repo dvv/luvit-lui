@@ -1,0 +1,283 @@
+#!/usr/bin/env luvit
+
+local Table = require('table')
+local Utils = require('utils')
+local Path = require('path')
+local Fs = require('fs')
+local Error = require('core').Error
+local DNS = require('dns')
+local HTTP = require('http')
+local parse_url = require('url').parse
+
+local unzip = require('balls').unzip
+
+--
+-- a simple command line arguments parser
+-- N.B. it's bundled version of stripped down dvv/luvit-cmdline
+--
+
+local function parse_argv(argv)
+  if not argv then argv = process.argv end
+  local opts = { }
+  local args = { }
+  for i, arg in ipairs(argv) do
+    local opt = arg:match("^%-%-(.*)")
+    if opt then
+      local key, value = opt:match("([a-z_%-]*)=(.*)")
+      if value then
+        if type(opts[key]) == 'string' then
+          opts[key] = { opts[key], value }
+        elseif type(opts[key]) == 'table' then
+          Table.insert(opts[key], value)
+        else
+          opts[key] = value
+        end
+      elseif opt ~= '' then
+        opts[opt] = true
+      else
+        for i = i + 1, #argv do
+          Table.insert(args, argv[i])
+        end
+        break
+      end
+    else
+      Table.insert(args, arg)
+    end
+  end
+  return opts, args
+end
+
+--
+-- parse command line
+--
+
+local options, arguments = parse_argv()
+
+--
+-- setup logger
+--
+
+local info = options.debug and print or function () end
+
+--
+-- report overall status on exit
+--
+
+local exit_code = 0
+process:once('exit', function (a, b)
+  exit_process(exit_code)
+end)
+
+--
+-- HTTP request helper
+-- N.B. it's bundled version of stripped down dvv/luvit-curl
+--
+
+local function request(options, callback)
+
+  setmetatable(options, { __index = {
+    method = 'GET',
+    proxy = true,
+    redirects = 10,
+  }})
+
+  -- parse URL
+  local parsed = options
+  if options.url then
+    parsed = parse_url(options.url)
+    setmetatable(parsed, { __index = options })
+  end
+
+  -- collect HTTP request options
+  local params = {
+    host = parsed.hostname or parsed.host,
+    port = parsed.port,
+    path = parsed.pathname .. parsed.search,
+    method = options.method,
+    headers = options.headers,
+  }
+
+  -- honor proxy, if any
+  local proxy = options.proxy
+  -- proxy can be string which is used verbatim,
+  -- or boolean true to use system proxy
+  if proxy == true then
+    proxy = process.env[parsed.protocol .. '_proxy']
+  end
+  -- proxying means...
+  if proxy then
+    -- ...request the proxy host
+    parsed = parse_url(proxy)
+    params.host = parsed.hostname or parsed.host
+    params.port = parsed.port
+    -- ...with path equal to original URL
+    params.path = options.url
+  end
+
+  info('Getting ' .. options.url .. '...')
+
+  --p('PARAMS', params)
+  -- resolve target host name
+  -- FIXME: the whole resolve thingy should go deeper to TCP layer
+  local status, err = pcall(DNS.resolve, params.host, function (err, ips)
+
+    -- DNS errors are ignored if host name looks like a valid IP
+    if err and not DNS.isIP(params.host) then
+      callback(err)
+      return
+    end
+    --p('IP', err, ips)
+    -- FIXME: should try every IP, in case of error
+    if ips then params.host = ips[1] end
+
+    --p('PARAMS', params)
+    --TODO: set Content-Length: if options.data
+    -- issue the request
+    local client = HTTP.request(params, function (req)
+
+      local st = req.status_code
+      -- handle redirect
+      if st > 300 and st < 400 and req.headers.location then
+        -- can follow new location?
+        if options.redirects and options.redirects > 0 then
+          -- FIXME: spoils original options. make it feature? ;)
+          options.redirects = options.redirects - 1
+          options.url = req.headers.location
+          -- for short redirects (RFC2616 compliant?) prepend current host name
+          if not parse_url(options.url).host then
+            options.url = parsed.protocol .. '://' .. parsed.host .. options.url
+          end
+          -- request redirected location
+          request(options, callback)
+          return
+        -- can't follow
+        else
+          -- FIXME: what to do? so far let's think it's ok, proceed to data parsing
+          --callback(nil)
+        end
+      -- report HTTP errors
+      elseif st >= 400 then
+        -- close the request
+        req:close()
+        err = Error:new(data)
+        -- FIXME: should reuse status_code_message from Response?
+        err.code = st
+        callback(err)
+        return
+      end
+
+      -- request was ok
+      callback(nil, req)
+
+    end)
+
+    -- purge issued request
+    client:once('end', function ()
+      client:close()
+    end)
+    -- pipe errors to callback
+    client:once('error', function (err)
+      client:close()
+      callback(err)
+    end)
+
+  end)
+
+  if not status then
+    callback(err)
+  end
+
+end
+
+--
+-- load and unzip a remote zipball into local `path`
+--
+
+local function unpack(url, path, options, callback)
+  if type(options) == 'function' then
+    options = nil
+    callback = options
+  end
+  if not options then options = { } end
+  request({
+    url = url,
+    method = 'GET',
+  }, function (err, stream)
+    if err then
+      --stream:close()
+      callback(err)
+      return
+    end
+    info(Utils.colorize('Bblack', 'Unzipping ') .. url .. Utils.colorize('Bblack', ' to ') .. path .. '')
+    unzip(stream, {
+      path = path,
+      strip = options.strip,
+    }, function (err)
+      stream:close()
+      callback(err)
+    end)
+  end)
+end
+
+--
+-- ???
+--
+
+local function getUrl(name)
+  return 'http://nodeload.github.com/dvv/luvit-' .. name .. '/zipball/master'
+end
+
+local function install(cwd)
+
+  if not cwd then cwd = '.' end
+
+  -- get dependencies for the current package
+  local deps = { }
+  local bins = { }
+  local ok, manifest = pcall(require, Path.join(cwd, 'package'))
+  if ok and manifest then
+    deps = manifest.dependencies or { }
+    -- add development dependencies if --dev option is given
+    if options.dev then
+      for k, v in pairs(manifest.devDependencies or { }) do
+        deps[k] = v
+      end
+    end
+    bins = manifest.bin or { }
+  end
+
+
+  -- fulfil deps
+  for name, url in pairs(deps) do
+
+    local target = Path.join(cwd, 'modules', name)
+    url = getUrl(name)
+
+    info(Utils.colorize('Bblack', 'Installing ') .. Utils.colorize('yellow', name))
+    unpack(url, target, { strip = 1 }, function (err)
+
+      --p('E', err)
+      local status = 'OK'
+      if err then
+        status = err.message or err.code or err
+      end
+      info(Utils.colorize(err and 'Bred' or 'green', 'Installed "' .. name .. '": ' .. status))
+      if err then
+        exit_code = 1
+        return
+      end
+
+      -- install this dependency dependencies
+      install(target)
+
+    end)
+
+  end
+
+end
+
+--
+-- start installing this module dependencies
+--
+
+install(process.cwd())
